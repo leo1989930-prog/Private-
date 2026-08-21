@@ -32,7 +32,6 @@ INTRADAY_CACHE_TTL = 15
 
 DEFAULT_STOCK = "6770"
 
-# Gemini 正式支援模型清單
 GEMINI_MODELS = [
     "gemini-2.0-flash",
     "gemini-1.5-flash",
@@ -40,13 +39,50 @@ GEMINI_MODELS = [
 ]
 
 # =========================================================
-# 🖥️ Streamlit 頁面與 RWD UI 樣式設定
+# 🖥️ Streamlit 頁面設定 (必須為第一個 Streamlit 指令)
 # =========================================================
 
 st.set_page_config(
     page_title="台股閃電智慧決策實戰系統_YL_V4.2",
     layout="wide"
 )
+
+# =========================================================
+# 🔒 密碼驗證模組（頁面第一道關卡）
+# =========================================================
+
+def check_password():
+    """檢查使用者密碼驗證狀態"""
+    # 從 Secrets 讀取 APP_PASSWORD，若未設定則預設為 123456
+    APP_PASSWORD = st.secrets.get("APP_PASSWORD", "123456")
+
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if not st.session_state.authenticated:
+        st.title("🔒 系統存取驗證")
+        st.markdown("---")
+        
+        pwd_input = st.text_input("請輸入系統密碼以繼續：", type="password")
+        
+        if st.button("🔓 登入系統", use_container_width=True):
+            if pwd_input == APP_PASSWORD:
+                st.session_state.authenticated = True
+                st.success("✅ 驗證成功，正在載入系統...")
+                st.rerun()
+            else:
+                st.error("❌ 密碼錯誤，請重新輸入！")
+        return False
+
+    return True
+
+# 執行驗證，未通過驗證者直接中斷後續程式碼渲染
+if not check_password():
+    st.stop()
+
+# =========================================================
+# 🎨 RWD UI 樣式設定
+# =========================================================
 
 st.markdown("""
 <style>
@@ -81,7 +117,6 @@ h1, h2, h3 {
     padding-left: 10px;
 }
 
-/* 📱 手機版 RWD 標題與版面微調 */
 @media (max-width: 768px) {
     h1 { font-size: 1.4rem !important; border-left-width: 5px !important; }
     h2 { font-size: 1.2rem !important; }
@@ -182,14 +217,13 @@ def get_market_session():
     return "盤後"
 
 def send_telegram_notify(token, chat_id, message):
-    """發送 Telegram 推播通知"""
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
         resp = requests.post(url, json=payload, timeout=5)
         return resp.status_code == 200
     except Exception as e:
-        logging.error(f"Telegram 發生異常: {e}")
+        logging.error(f"Telegram 傳送失敗: {e}")
         return False
 
 # =========================================================
@@ -254,7 +288,7 @@ def get_realtime_price(symbol):
             if last_price is not None and float(last_price) > 0:
                 return float(last_price), "Fugle 即時報價"
         except Exception as e:
-            logging.warning(f"Fugle 報價失敗: {e}")
+            logging.warning(f"Fugle 報價取得失敗: {e}")
     for yf_symbol in get_yf_symbols(symbol):
         try:
             df = yf.download(yf_symbol, period="1d", interval="1m", progress=False)
@@ -275,7 +309,6 @@ def get_intraday_orb_and_df(symbol):
             if df.empty: continue
             df = normalize_yf_columns(df)
             
-            # 時區對齊至 Asia/Taipei 確保開盤時間篩選精準
             if df.index.tz is not None:
                 df.index = df.index.tz_convert(TAIPEI_TZ)
             else:
@@ -321,7 +354,7 @@ def get_market_levels(symbol):
     return result
 
 # =========================================================
-# 📈 繪圖與計算核心
+# 📈 繪圖與量化核心
 # =========================================================
 
 def plot_intraday_chart(df, symbol, stock_name, orb_high, orb_low):
@@ -485,7 +518,7 @@ def generate_strategy(stock_name, symbol, price, night_chg, foreign_oi, levels, 
 st.title("⚡ 台股閃電智慧決策實戰系統_YL_V4.2 (TG推播版)")
 
 st.sidebar.header("📊 參數與戰術設定")
-if st.sidebar.button("🔄 立即刷新報價", use_container_width=True):
+if st.sidebar.button("🔄 離線/刷新報價", use_container_width=True):
     st.cache_data.clear()
     st.sidebar.success("快取已清空，數據即時刷新中！")
 
@@ -536,7 +569,7 @@ user_tg_chat_id = st.sidebar.text_input("TG Chat ID (選填)", value=TG_CHAT_ID,
 enable_tg_push = st.sidebar.checkbox("✅ 產出戰術後自動推播至 Telegram", value=bool(TG_BOT_TOKEN and TG_CHAT_ID))
 
 # =========================================================
-# 🚀 雙分頁系統 (即時看板 vs 歷史回測)
+# 🚀 雙分頁系統
 # =========================================================
 
 tab_main, tab_history = st.tabs(["⚡ 即時決策中心", "📚 戰術歷史日誌 (回測區)"])
@@ -562,7 +595,6 @@ with tab_main:
     )
     st.markdown("---")
 
-    # 戰術按鈕
     st.subheader("🤖 Rule Engine / AI 聯合戰術推演")
     market_session = get_market_session()
     st.info(f"系統台北時間：{get_tw_now().strftime('%Y-%m-%d %H:%M:%S')} ｜ 市場狀態：{market_session}")
@@ -594,7 +626,6 @@ with tab_main:
             )
             st.session_state.strategy_result = (rule_report, ai_json)
 
-            # 記錄到歷史日誌
             log_time = get_tw_now().strftime("%Y-%m-%d %H:%M:%S")
             ai_signal = ai_json.get("action_signal", "中性觀望") if ai_json else "中性觀望"
             st.session_state.strategy_logs.insert(0, {
@@ -605,7 +636,6 @@ with tab_main:
                 "AI 核心訊號": ai_signal
             })
 
-            # Telegram 推播處理
             if enable_tg_push and user_tg_token and user_tg_chat_id:
                 msg = f"""
 <b>⚡【閃電戰術推播】</b>
