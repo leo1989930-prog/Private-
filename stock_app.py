@@ -32,15 +32,15 @@ INTRADAY_CACHE_TTL = 15
 
 DEFAULT_STOCK = "6770"
 
-# Gemini 備援模型清單
+# Gemini 正式支援模型清單
 GEMINI_MODELS = [
-    "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-flash"
+    "gemini-1.5-flash",
+    "gemini-1.5-pro"
 ]
 
 # =========================================================
-# 🖥️ Streamlit 頁面與 UI 樣式設定
+# 🖥️ Streamlit 頁面與 RWD UI 樣式設定
 # =========================================================
 
 st.set_page_config(
@@ -50,7 +50,7 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-body, p, div, span, h1, h2, h3, h4, h5, h6, label, input {
+body, p, div, span, label, input {
     font-family: '微軟正黑體', 'Microsoft JhengHei', sans-serif;
 }
 .stApp {
@@ -76,15 +76,24 @@ body, p, div, span, h1, h2, h3, h4, h5, h6, label, input {
 h1, h2, h3 {
     color: #000000 !important;
     font-weight: 900 !important;
-    letter-spacing: 1.5px;
-    border-left: 10px solid #FFD700;
-    padding-left: 12px;
+    letter-spacing: 1px;
+    border-left: 8px solid #FFD700;
+    padding-left: 10px;
 }
+
+/* 📱 手機版 RWD 標題與版面微調 */
+@media (max-width: 768px) {
+    h1 { font-size: 1.4rem !important; border-left-width: 5px !important; }
+    h2 { font-size: 1.2rem !important; }
+    h3 { font-size: 1.05rem !important; }
+    .action-card { padding: 12px !important; }
+}
+
 hr {
     border: 0;
     height: 3px;
     background-color: #333333;
-    margin: 1.5em 0;
+    margin: 1.2em 0;
 }
 .highlight-tag {
     background-color: #FFD700;
@@ -178,11 +187,7 @@ def send_telegram_notify(token, chat_id, message):
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
         resp = requests.post(url, json=payload, timeout=5)
-        if resp.status_code == 200:
-            return True
-        else:
-            logging.error(f"Telegram 推播失敗: {resp.status_code} - {resp.text}")
-            return False
+        return resp.status_code == 200
     except Exception as e:
         logging.error(f"Telegram 發生異常: {e}")
         return False
@@ -269,20 +274,30 @@ def get_intraday_orb_and_df(symbol):
             df = yf.download(yf_symbol, period="1d", interval="1m", progress=False)
             if df.empty: continue
             df = normalize_yf_columns(df)
-            df.index = pd.to_datetime(df.index)
+            
+            # 時區對齊至 Asia/Taipei 確保開盤時間篩選精準
+            if df.index.tz is not None:
+                df.index = df.index.tz_convert(TAIPEI_TZ)
+            else:
+                df.index = df.index.tz_localize("UTC").tz_convert(TAIPEI_TZ)
+
             orb_data["today_high"] = round(float(df["High"].max()), 2)
             orb_data["today_low"] = round(float(df["Low"].min()), 2)
+            
             df_orb = df.between_time("09:00", "09:05")
             if not df_orb.empty:
                 orb_data["orb_high"] = round(float(df_orb["High"].max()), 2)
                 orb_data["orb_low"] = round(float(df_orb["Low"].min()), 2)
+                
             if "Volume" in df.columns and "Close" in df.columns:
                 cum_vol = df["Volume"].cumsum()
                 cum_vol_price = (df["Close"] * df["Volume"]).cumsum()
                 df["VWAP"] = np.where(cum_vol > 0, cum_vol_price / cum_vol, df["Close"])
+            
             orb_data["df"] = df
             return orb_data
-        except Exception:
+        except Exception as e:
+            logging.error(f"即時 K 線計算異常: {e}")
             continue
     return orb_data
 
@@ -330,7 +345,7 @@ def plot_intraday_chart(df, symbol, stock_name, orb_high, orb_low):
     fig.update_layout(
         title=f"📈 {stock_name} ({symbol}) 1m 盤中即時走勢與 ORB 攻防線",
         yaxis_title="價格 (元)", xaxis_title="時間", template="plotly_dark",
-        height=450, margin=dict(l=20, r=20, t=40, b=20), xaxis_rangeslider_visible=False
+        height=420, margin=dict(l=15, r=15, t=35, b=15), xaxis_rangeslider_visible=False
     )
     st.plotly_chart(fig, use_container_width=True)
 
